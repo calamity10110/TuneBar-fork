@@ -12,6 +12,13 @@
 #include <WiFi.h>
 #include <WiFiClientSecure.h>
 #include <stdint.h>
+#include <Preferences.h>
+
+#if __has_include(<esp_crt_bundle.h>)
+#include <esp_crt_bundle.h>
+#else
+#include <cert_profile_x509.h>
+#endif
 
 extern PCF85063 rtc;
 
@@ -67,85 +74,74 @@ static bool ssid_equals(const char *a, const char *b) {
   return strcmp(a, b) == 0;
 }
 
-// load wifi credential from wifi.json
+// load wifi credential from Preferences (NVS)
 int loadWifiList(WifiEntry list[]) {
-  if (!LittleFS.exists(WIFI_FILE)) {
-    log_w("wifi.json not found → creating empty list");
-    File f = LittleFS.open(WIFI_FILE, "w");
-    if (f) {
-      f.print("[]");
-      f.close();
+  Preferences wifiPref;
+  wifiPref.begin("wifi_creds", true); // read only
+
+  int count = wifiPref.getInt("count", 0);
+  if (count > WIFI_MAX) count = WIFI_MAX;
+
+  int valid_count = 0;
+  for (int i = 0; i < count; i++) {
+    char key_ssid[16];
+    char key_pass[16];
+    snprintf(key_ssid, sizeof(key_ssid), "ssid_%d", i);
+    snprintf(key_pass, sizeof(key_pass), "pass_%d", i);
+
+    String ssid = wifiPref.getString(key_ssid, "");
+    String password = wifiPref.getString(key_pass, "");
+
+    if (ssid.length() > 0) {
+      strncpy(list[valid_count].ssid, ssid.c_str(), sizeof(list[valid_count].ssid) - 1);
+      strncpy(list[valid_count].password, password.c_str(), sizeof(list[valid_count].password) - 1);
+
+      list[valid_count].ssid[sizeof(list[valid_count].ssid) - 1] = '\0';
+      list[valid_count].password[sizeof(list[valid_count].password) - 1] = '\0';
+
+      sanitize_string(list[valid_count].ssid);
+      sanitize_string(list[valid_count].password);
+
+      log_d("WiFi[%d] SSID='%s'", valid_count, list[valid_count].ssid);
+      valid_count++;
     }
-    return 0;
   }
 
-  File f = LittleFS.open(WIFI_FILE, "r");
-  if (!f) {
-    log_e("Failed to open wifi.json");
-    return 0;
-  }
-
-  static JsonDocument doc;
-  doc.clear();
-  DeserializationError err = deserializeJson(doc, f);
-  f.close();
-
-  if (err || !doc.is<JsonArray>()) {
-    log_w("wifi.json invalid → reset");
-    File f2 = LittleFS.open(WIFI_FILE, "w");
-    if (f2) {
-      f2.print("[]");
-      f2.close();
-    }
-    return 0;
-  }
-
-  int count = 0;
-
-  for (JsonObject obj : doc.as<JsonArray>()) {
-    if (count >= WIFI_MAX) break;
-
-    const char *ssid = obj["ssid"];
-    const char *password = obj["password"];
-
-    if (!ssid || !*ssid) continue;
-
-    strncpy(list[count].ssid, ssid, sizeof(list[count].ssid) - 1);
-    strncpy(list[count].password, password ? password : "", sizeof(list[count].password) - 1);
-
-    list[count].ssid[sizeof(list[count].ssid) - 1] = '\0';
-    list[count].password[sizeof(list[count].password) - 1] = '\0';
-
-    sanitize_string(list[count].ssid);
-    sanitize_string(list[count].password);
-
-    log_d("WiFi[%d] SSID='%s'", count, list[count].ssid);
-    count++;
-  }
-  return count;
+  wifiPref.end();
+  return valid_count;
 }
 
-// SAVE WIFI LIST
+// SAVE WIFI LIST to Preferences (NVS)
 void saveWifiList(const WifiEntry list[], int count) {
-  static JsonDocument doc;
-  doc.clear();
-  JsonArray arr = doc.to<JsonArray>();
+  Preferences wifiPref;
+  wifiPref.begin("wifi_creds", false); // read/write
 
+  // Clear old credentials to avoid leftover data
+  wifiPref.clear();
+
+  int valid_count = 0;
   for (int i = 0; i < count; i++) {
     if (!list[i].ssid[0]) continue;
 
-    JsonObject o = arr.add<JsonObject>();
-    o["ssid"] = list[i].ssid;
-    o["password"] = list[i].password;
+    char key_ssid[16];
+    char key_pass[16];
+    snprintf(key_ssid, sizeof(key_ssid), "ssid_%d", valid_count);
+    snprintf(key_pass, sizeof(key_pass), "pass_%d", valid_count);
+
+    wifiPref.putString(key_ssid, list[i].ssid);
+    wifiPref.putString(key_pass, list[i].password);
+    valid_count++;
   }
-  File f = LittleFS.open(WIFI_FILE, "w");
-  if (!f) {
-    log_e("Failed to write wifi.json");
-    return;
+
+  wifiPref.putInt("count", valid_count);
+  wifiPref.end();
+
+  // Remove the old wifi.json file if it exists
+  if (LittleFS.exists(WIFI_FILE)) {
+    LittleFS.remove(WIFI_FILE);
   }
-  serializeJson(doc, f);
-  f.close();
-  log_d("Saved %d WiFi entries", count);
+
+  log_d("Saved %d WiFi entries to NVS", valid_count);
 }
 
 // ADD / UPDATE ENTRY
@@ -447,7 +443,11 @@ bool fetchUrlData(const char *url, bool ssl, char *outBuf, size_t outBufSize) {
   http->end();
 
   if (ssl) {
-    clientSecure.setInsecure();
+#if __has_include(<esp_crt_bundle.h>)
+    clientSecure.setCACertBundle(esp_crt_bundle_attach);
+#else
+    clientSecure.setCACertBundle(rootca_crt_bundle_start);
+#endif
     http->begin(clientSecure, url);
   } else {
     http->begin(client, url);

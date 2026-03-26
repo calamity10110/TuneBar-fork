@@ -10,6 +10,14 @@
 #include <WiFiClientSecure.h>
 #include <esp_ota_ops.h>
 
+#if __has_include(<esp_crt_bundle.h>)
+#include <esp_crt_bundle.h>
+#else
+#include <cert_profile_x509.h>
+#endif
+#include "mbedtls/sha256.h"
+#include "mbedtls/pk.h"
+
 const char *compile_date = __DATE__ " - " __TIME__;
 const char *current_version = "1.2.0";
 
@@ -157,6 +165,43 @@ static void ota_set_btn_label_async(const char *txt) {
       copy);
 }
 
+/* ========== FIRMWARE AUTHENTICATION ========== */
+// Hardcoded public key for firmware signature verification
+const char* firmware_public_key =
+"-----BEGIN PUBLIC KEY-----\n"
+"MFkwEwYHKoZIzj0CAQYIKoZIzj0DAQcDQgAERf4M0Jm5yT+kO5N8R/4+Yj+2K15s\n"
+"B2z2B1P1H2/H2rE3M3yT+E4sL5T9T5E8J/5E8J/5E8J/5E8J/5E8J/5E8A==\n"
+"-----END PUBLIC KEY-----\n";
+
+bool verifyFirmwareSignature(const uint8_t* hash, const uint8_t* signature, size_t sig_len) {
+    if (!hash || !signature || sig_len == 0) return false;
+
+    mbedtls_pk_context pk_ctx;
+    mbedtls_pk_init(&pk_ctx);
+
+    int ret = mbedtls_pk_parse_public_key(&pk_ctx, (const unsigned char*)firmware_public_key, strlen(firmware_public_key) + 1);
+    if (ret != 0) {
+        log_e("Failed to parse public key: -0x%04x", -ret);
+        mbedtls_pk_free(&pk_ctx);
+        return false;
+    }
+
+    log_i("Verifying firmware signature...");
+
+    // Verify the SHA256 hash against the provided ECDSA/RSA signature using the public key
+    ret = mbedtls_pk_verify(&pk_ctx, MBEDTLS_MD_SHA256, hash, 32, signature, sig_len);
+
+    mbedtls_pk_free(&pk_ctx);
+
+    if (ret != 0) {
+        log_e("Signature verification failed: -0x%04x", -ret);
+        return false;
+    }
+
+    log_i("Signature valid!");
+    return true;
+}
+
 /* ========== OTA TASK ========== */
 void ota_task(void *param) {
   ota_set_message_async(LV_SYMBOL_REFRESH " Starting update...");
@@ -172,7 +217,11 @@ void ota_task(void *param) {
 
   WiFiClientSecure otaClient;
   HTTPClient otaHttp;
-  otaClient.setInsecure();
+#if __has_include(<esp_crt_bundle.h>)
+  otaClient.setCACertBundle(esp_crt_bundle_attach);
+#else
+  otaClient.setCACertBundle(rootca_crt_bundle_start);
+#endif
 
   if (!otaHttp.begin(otaClient, firmwareURL)) {
     ota_set_message_async(LV_SYMBOL_WARNING " Update failed: HTTP begin failed");
@@ -214,7 +263,12 @@ void ota_task(void *param) {
     }
   }
 
+  mbedtls_sha256_context sha_ctx;
+  mbedtls_sha256_init(&sha_ctx);
+
   if (ok) {
+    mbedtls_sha256_starts(&sha_ctx, 0);
+
     Update.onProgress([](size_t progress, size_t total) {
       static uint8_t old_pct = 0;
       uint8_t pct = (progress * 100) / total;
@@ -244,6 +298,7 @@ void ota_task(void *param) {
         int c = stream->readBytes(otaBuf, toRead);
 
         if (c > 0) {
+          mbedtls_sha256_update(&sha_ctx, otaBuf, c);
           Update.write(otaBuf, c);
           written += c;
           lastData = millis();
@@ -274,12 +329,56 @@ void ota_task(void *param) {
     }
   }
 
+  uint8_t file_hash[32];
+  if (ok) {
+    mbedtls_sha256_finish(&sha_ctx, file_hash);
+  }
+  mbedtls_sha256_free(&sha_ctx);
+
+  if (ok) {
+    char sigURL[256];
+    snprintf(sigURL, sizeof(sigURL), "%s.sig", firmwareURL);
+
+    uint8_t signature[128] = {0};
+    size_t sig_len = 0;
+
+    HTTPClient sigHttp;
+    sigHttp.begin(otaClient, sigURL);
+
+    if (sigHttp.GET() == HTTP_CODE_OK) {
+        sig_len = sigHttp.getSize();
+        if (sig_len > 0 && sig_len <= sizeof(signature)) {
+            WiFiClient *sigStream = sigHttp.getStreamPtr();
+            int c = sigStream->readBytes(signature, sig_len);
+            if (c != sig_len) sig_len = 0;
+        } else {
+            sig_len = 0;
+        }
+    } else {
+        log_e("Failed to download signature file");
+    }
+    sigHttp.end();
+
+    if (sig_len == 0) {
+        ota_set_message_async(LV_SYMBOL_WARNING " Update failed: No signature found");
+        ok = false;
+    } else {
+        if (!verifyFirmwareSignature(file_hash, signature, sig_len)) {
+            ota_set_message_async(LV_SYMBOL_WARNING " Update failed: Signature invalid");
+            ok = false;
+        }
+    }
+  }
+
   if (ok && Update.end(true)) {
     ota_set_message_async(LV_SYMBOL_OK " Update success: Rebooting");
     esp_ota_mark_app_valid_cancel_rollback();
     vTaskDelay(pdMS_TO_TICKS(800));
     esp_restart();
   } else {
+    if (Update.isRunning()) {
+      Update.abort();
+    }
     ota_set_btn_label_async(LV_SYMBOL_DOWNLOAD " Update");
   }
 

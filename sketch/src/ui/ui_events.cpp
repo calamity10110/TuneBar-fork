@@ -147,6 +147,7 @@ void init_main_menu_task(lv_timer_t *timer) {
   wifiEnable = pref.getBool("wifi_enable", true);
 
   pref.end();
+  loadWeatherApiKey();
   SCREEN_OFF_TIMER = millis(); // reset timer
 
   if (wifiEnable) {
