@@ -713,7 +713,7 @@ void saveConfig(lv_event_t *e) {
   pref.putUChar("wallpaper", wallpaperIndex);
   // Region
   if (lv_obj_has_state(ui_MainMenu_Checkbox_AutoIP, LV_STATE_CHECKED)) {
-    strcpy(query_parameter, "auto:ip");
+    snprintf(query_parameter, sizeof(query_parameter), "auto:ip");
   } else { // merge lat long into  lag,long
     const char *lat = lv_textarea_get_text(ui_MainMenu_Textarea_Latitude);
     const char *lon = lv_textarea_get_text(ui_MainMenu_Textarea_Longitude);
@@ -890,7 +890,7 @@ void updateAQIwidget(lv_event_t *e) {
 }
 // set query paramter to auto detect IP address
 void set_query_para_autoip(lv_event_t *e) {
-  strcpy(query_parameter, "auto:ip");
+  snprintf(query_parameter, sizeof(query_parameter), "auto:ip");
   SCREEN_OFF_TIMER = millis(); // reset timer
 }
 // number pad
