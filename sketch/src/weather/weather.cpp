@@ -4,12 +4,57 @@
 #include "ui/ui.h"
 #include <Arduino.h>
 #include <ArduinoJson.h>
+#include <Preferences.h>
 
 const char *weatherUrl = "http://api.weatherapi.com/v1/current.json?key=%s&q=%s&aqi=yes";
 //"https://api.weatherapi.com/v1/current.json?key=%s&q=%s&aqi=yes"; for SSL
-const char *weatherApiKey = "1f00c88f3483483a9ba62101250612";
 
+char weatherApiKey[64] = "";
 char query_parameter[64] = "auto:ip"; // auto detect by IP , or city name "Bangkok", or "lat,long" 13.6499579,100.4103726
+
+#include <LittleFS.h>
+#include <SD.h>
+
+void loadWeatherApiKey() {
+  Preferences pref;
+  pref.begin("config", true);
+  String key = pref.getString("weather_key", "");
+  pref.end();
+  if (key.length() > 0) {
+    strncpy(weatherApiKey, key.c_str(), sizeof(weatherApiKey) - 1);
+    return;
+  }
+
+  // Try to load from SD card
+  if (SD.exists("/weatherAPI.txt")) {
+    File f = SD.open("/weatherAPI.txt", "r");
+    if (f) {
+      String sdKey = f.readStringUntil('\n');
+      sdKey.trim();
+      if (sdKey.length() > 0) {
+        strncpy(weatherApiKey, sdKey.c_str(), sizeof(weatherApiKey) - 1);
+        f.close();
+        return;
+      }
+      f.close();
+    }
+  }
+
+  // Try to load from LittleFS
+  if (LittleFS.exists("/weatherAPI.txt")) {
+    File f = LittleFS.open("/weatherAPI.txt", "r");
+    if (f) {
+      String fsKey = f.readStringUntil('\n');
+      fsKey.trim();
+      if (fsKey.length() > 0) {
+        strncpy(weatherApiKey, fsKey.c_str(), sizeof(weatherApiKey) - 1);
+        f.close();
+        return;
+      }
+      f.close();
+    }
+  }
+}
 const int8_t UTC_offset_hour[27] = {14, 13, 12, 11, 10, 9, 8, 7, 6, 5, 4, 3, 2, 1, 0, -1, -2, -3, -4, -5, -6, -7, -8, -9, -10, -11, -12};
 const int8_t UTC_offset_minute[7] = {45, 30, 15, 0, -15, -30, -45};
 uint8_t temp_unit = 0; // unit index  0=celcius, 1 = farenheit
@@ -371,6 +416,13 @@ void updateWeatherPanelTask(void *parameter) {
 #define MAX_URL_LENGTH 512 // กำหนดขนาดบัฟเฟอร์สูงสุดที่ปลอดภัย
 #define JSON_BUF_SIZE 2048
   static char reqURL[MAX_URL_LENGTH];
+  if (strlen(weatherApiKey) == 0) {
+    log_w("Weather API key is not configured.");
+    // Optionally display something in the UI
+    weatherTask = NULL;
+    vTaskDelete(NULL);
+    return;
+  }
   snprintf(reqURL, MAX_URL_LENGTH, weatherUrl, weatherApiKey, query_parameter);
   log_d("Weather request URL: %s", reqURL);
 
