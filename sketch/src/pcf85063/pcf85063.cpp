@@ -158,8 +158,9 @@ uint8_t PCF85063::cap_sel(uint8_t value) {
 #ifdef PCF85063_USE_STRINGS
 void PCF85063::timeOrDateStringsToInts(const char time_or_date[], int time_or_date_parts[]) {
   int time_or_date_index = 0;
-  char mutable_time_or_date[12];
-  strcpy(mutable_time_or_date, time_or_date);
+  char mutable_time_or_date[20];
+  strncpy(mutable_time_or_date, time_or_date, sizeof(mutable_time_or_date) - 1);
+  mutable_time_or_date[sizeof(mutable_time_or_date) - 1] = '\0';
   char *token;
 
   token = strtok(mutable_time_or_date, " :");
