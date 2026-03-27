@@ -1,4 +1,4 @@
-#include "TCA9554.h"
+#include "tca9554.h"
 
 // --- TCA9554 IO Expander DEFINITIONS ---
 

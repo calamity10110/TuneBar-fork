@@ -31,6 +31,7 @@ lv_obj_t * ui_Player_Label_Label4 = NULL;
 lv_obj_t * ui_Player_Label_ElapseTime = NULL;
 lv_obj_t * ui_Player_Label_RemainTime = NULL;
 lv_obj_t * ui_Player_Container_albumCover = NULL;
+lv_obj_t * ui_Player_Game_Display = NULL;
 lv_obj_t * ui_Player_Button_returnMenu = NULL;
 lv_obj_t * ui_Player_Label_Label7 = NULL;
 lv_obj_t * ui_Player_Container_status1 = NULL;
@@ -504,6 +505,12 @@ void ui_Screen_Player_screen_init(void)
     lv_obj_set_style_bg_color(ui_Player_Container_albumCover, lv_color_hex(0xFFFFFF), LV_PART_MAIN | LV_STATE_DEFAULT);
     lv_obj_set_style_bg_opa(ui_Player_Container_albumCover, 0, LV_PART_MAIN | LV_STATE_DEFAULT);
 
+    ui_Player_Game_Display = lv_img_create(ui_Screen_Player);
+    lv_obj_set_width(ui_Player_Game_Display, 320);
+    lv_obj_set_height(ui_Player_Game_Display, 240);
+    lv_obj_set_align(ui_Player_Game_Display, LV_ALIGN_CENTER);
+    lv_obj_add_flag(ui_Player_Game_Display, LV_OBJ_FLAG_HIDDEN); // Hidden by default
+
     ui_Player_Button_returnMenu = lv_btn_create(ui_Screen_Player);
     lv_obj_set_width(ui_Player_Button_returnMenu, 40);
     lv_obj_set_height(ui_Player_Button_returnMenu, 40);
@@ -632,6 +639,7 @@ void ui_Screen_Player_screen_destroy(void)
     ui_Player_Label_ElapseTime = NULL;
     ui_Player_Label_RemainTime = NULL;
     ui_Player_Container_albumCover = NULL;
+    ui_Player_Game_Display = NULL;
     ui_Player_Button_returnMenu = NULL;
     ui_Player_Label_Label7 = NULL;
     ui_Player_Container_status1 = NULL;
