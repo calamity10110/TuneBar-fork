@@ -44,7 +44,7 @@
 #include "weather/weather.h" // weather air quality widget
 #include "network/network.h" // wifi network
 #include "updater/updater.h"
-//#include "qmi8658/qmi8658.h" // imu
+#include "qmi8658/qmi8658.h" // imu
 
 
 extern Audio audio;
@@ -132,6 +132,8 @@ void setup() {
   } else {
     log_e("ES7210 FAILED to Initialize");
   }
+
+  qmi8658_init();
 
   // Free RTOS Task
   xTaskCreatePinnedToCore(audio_loop_task, "audio_loop", 5 * 1024, NULL, 4, NULL, 1);

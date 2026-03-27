@@ -17,6 +17,9 @@ Preferences pref;
 
 #include "ESP32-audioI2S-master/Audio.h"
 #include "es7210/es7210.h"
+#include "game/car_game.h"
+#include <SpotifyEsp32.h>
+
 extern Audio audio;
 uint8_t audio_volume = 10;
 extern ES7210 mic;
@@ -30,6 +33,27 @@ bool mute = false;
 
 #define WIFI_CHECK_INTERVAL 5000 //wifi connection checking interval 5 second.
 #define MAX_WALLPAPER 7 //number of wallpaper (including none)
+
+// Game and Spotify global instances
+static lv_timer_t *game_timer = NULL;
+static lv_img_dsc_t game_img_dsc;
+static bool game_initialized = false;
+static Spotify *spotify_client = NULL;
+
+const char* spotify_client_id = "YOUR_CLIENT_ID"; // Replace as needed
+const char* spotify_client_secret = "YOUR_CLIENT_SECRET"; // Replace as needed
+const char* spotify_refresh_token = "YOUR_REFRESH_TOKEN"; // Replace as needed
+
+void game_loop_timer_cb(lv_timer_t *timer) {
+    if (mediaType == 2) {
+        // Run one frame of the game
+        game_loop(0.016f); // ~60fps step
+        // Invalidate the image widget to redraw
+        if (ui_Player_Game_Display) {
+            lv_obj_invalidate(ui_Player_Game_Display);
+        }
+    }
+}
 
 // set wallpaper dropdown menu
 const char *wallpaper_menu = "None\nThailand\nChristmas1\nChristmas2\nFuture\nBeach\nNature";
@@ -296,7 +320,9 @@ void previoustrack(lv_event_t *e) {
     break;
   }
   case 2: // chatbot mode
-    // do nothing (or add specific action for chatbot here)
+    if (spotify_client && spotify_client->is_auth()) {
+      spotify_client->skip_to_previous();
+    }
     break; // Cleaned up: only one break needed
 
   default:
@@ -365,29 +391,19 @@ void playpause(lv_event_t *e) {
       break;
     }
     case 2: // chatbot mode
-
-        lv_label_set_text(ui_Player_Label_Label5, LV_SYMBOL_PLAY);
-    lv_obj_set_style_radius(ui_Player_Button_play, 25, LV_PART_MAIN);
-    paused = true;
-            // do nothing (or add specific action for chatbot here)
-      /*
-            lv_textarea_set_text(ui_Player_Textarea_status, "Listenning...");
-      audioStopSong();
-
-      int32_t dummy[1024] = {0};
-      size_t n;
-      auto txh = audio.getTxHandle();
-      i2s_channel_write(txh, dummy, sizeof(dummy), &n, 100);
-
-      // ปลุกชิป ES7210
-      if (!mic.start()) {
-        log_e("ES7210 not detected");
-        return;
+      if (spotify_client && spotify_client->is_auth()) {
+          if (paused) {
+              spotify_client->start_a_users_playback();
+              lv_label_set_text(ui_Player_Label_Label5, LV_SYMBOL_PAUSE);
+              lv_obj_set_style_radius(ui_Player_Button_play, 10, LV_PART_MAIN);
+              paused = false;
+          } else {
+              spotify_client->pause_playback();
+              lv_label_set_text(ui_Player_Label_Label5, LV_SYMBOL_PLAY);
+              lv_obj_set_style_radius(ui_Player_Button_play, 25, LV_PART_MAIN);
+              paused = true;
+          }
       }
-      delay(100);
-      log_i("Recording Started at 48k");
-      is_mic_mode = true;
-      */
       break; // Cleaned up: only one break needed
     }
   }
@@ -453,7 +469,9 @@ void nexttrack(lv_event_t *e) {
   }
 
   case 2: // chatbot mode
-    // do nothing (or add specific action for chatbot here)
+    if (spotify_client && spotify_client->is_auth()) {
+        spotify_client->skip_to_next();
+    }
     break; // Cleaned up: only one break needed
 
   default:
@@ -648,6 +666,8 @@ void livestreamMode(lv_event_t *e) {
   lv_img_set_zoom(ui_MainMenu_Image_ChatBot, 256);
   bounce_Animation(ui_MainMenu_Image_LiveStreaming, 0);
   lv_obj_set_style_bg_img_src(ui_Player_Container_albumCover, &ui_img_images_livestreaming_png, LV_PART_MAIN);
+  lv_obj_clear_flag(ui_Player_Container_albumCover, LV_OBJ_FLAG_HIDDEN);
+  if(ui_Player_Game_Display) lv_obj_add_flag(ui_Player_Game_Display, LV_OBJ_FLAG_HIDDEN);
   SCREEN_OFF_TIMER = millis(); // reset timer
   BL_OFF = false; // auto backlight on
 }
@@ -668,6 +688,8 @@ void musicPlayerMode(lv_event_t *e) {
   lv_img_set_zoom(ui_MainMenu_Image_ChatBot, 256);
   bounce_Animation(ui_MainMenu_Image_MusicPlayer, 0);
   lv_obj_set_style_bg_img_src(ui_Player_Container_albumCover, &ui_img_images_music_png, LV_PART_MAIN);
+  lv_obj_clear_flag(ui_Player_Container_albumCover, LV_OBJ_FLAG_HIDDEN);
+  if(ui_Player_Game_Display) lv_obj_add_flag(ui_Player_Game_Display, LV_OBJ_FLAG_HIDDEN);
   SCREEN_OFF_TIMER = millis(); // reset timer
   BL_OFF = false; // auto backlight on
 }
@@ -682,15 +704,40 @@ void chatBotMode(lv_event_t *e) {
      audioPlayFS(1, "/audio/ai_not_support.mp3");
   }
   mediaType = 2;
-  lv_textarea_set_text(ui_Player_Textarea_status, "Under development!\n");
+  lv_textarea_set_text(ui_Player_Textarea_status, "Starting Game and Spotify...\n");
   lv_anim_del(NULL, (lv_anim_exec_xcb_t)_ui_anim_callback_set_image_zoom);
   lv_img_set_zoom(ui_MainMenu_Image_MusicPlayer, 256);
   lv_img_set_zoom(ui_MainMenu_Image_LiveStreaming, 256);
   bounce_Animation(ui_MainMenu_Image_ChatBot, 0);
-  lv_obj_set_style_bg_img_src(ui_Player_Container_albumCover, &ui_img_images_assistant_png, LV_PART_MAIN);
+
+  lv_obj_add_flag(ui_Player_Container_albumCover, LV_OBJ_FLAG_HIDDEN);
+  if(ui_Player_Game_Display) {
+      lv_obj_clear_flag(ui_Player_Game_Display, LV_OBJ_FLAG_HIDDEN);
+      if(!game_initialized) {
+          game_init();
+
+          game_img_dsc.header.always_zero = 0;
+          game_img_dsc.header.w = 320;
+          game_img_dsc.header.h = 240;
+          game_img_dsc.data_size = 320 * 240 * 2;
+          game_img_dsc.header.cf = LV_IMG_CF_TRUE_COLOR;
+          game_img_dsc.data = (const uint8_t *)get_game_buffer();
+
+          lv_img_set_src(ui_Player_Game_Display, &game_img_dsc);
+
+          game_timer = lv_timer_create(game_loop_timer_cb, 16, NULL);
+          game_initialized = true;
+
+          if (!spotify_client) {
+              spotify_client = new Spotify(spotify_client_id, spotify_client_secret, spotify_refresh_token);
+              spotify_client->begin();
+              lv_textarea_set_text(ui_Player_Textarea_status, "Spotify Connected!\nPress Play to start.");
+          }
+      }
+  }
+
   SCREEN_OFF_TIMER = millis(); // reset timer
   BL_OFF = false; // auto backlight on
-   
 }
 // informaiton Mode event
 void informationMode(lv_event_t *e) {
